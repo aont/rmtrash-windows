@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import ctypes
 import sys
+import enum
 
 class SHFILEOPSTRUCTW(ctypes.Structure):
   _fields_ = [
@@ -14,27 +15,30 @@ class SHFILEOPSTRUCTW(ctypes.Structure):
     ("lpszProgressTitle", ctypes.c_wchar_p),
   ]
 
-# FO_MOVE = 0x1
-# FO_COPY = 0x2
-FO_DELETE = 0x3
-# FO_RENAME = 0x4
+class FO(enum.IntEnum):
+  MOVE = 0x1
+  COPY = 0x2
+  DELETE = 0x3
+  RENAME = 0x4
 
-# FOF_MULTIDESTFILES = 0x1
-# FOF_CONFIRMMOUSE = 0x2
-FOF_SILENT = 0x4
-# FOF_RENAMEONCOLLISION = 0x8
-FOF_NOCONFIRMATION = 0x10
-# FOF_WANTMAPPINGHANDLE = 0x20
-FOF_ALLOWUNDO = 0x40
-# FOF_FILESONLY = 0x80
-# FOF_SIMPLEPROGRESS = 0x100
-# FOF_NOCONFIRMMKDIR = 0x200
-FOF_NOERRORUI = 0x400
-# FOF_NOCOPYSECURITYATTRIBS = 0x800
-# FOF_NORECURSION = 0x1000
-# FOF_NO_CONNECTED_ELEMENTS = 0x2000
-# FOF_WANTNUKEWARNING = 0x4000
-# FOF_NORECURSEREPARSE = 0x8000
+
+class FOF(enum.IntEnum):
+  MULTIDESTFILES = 0x1
+  CONFIRMMOUSE = 0x2
+  SILENT = 0x4
+  RENAMEONCOLLISION = 0x8
+  NOCONFIRMATION = 0x10
+  WANTMAPPINGHANDLE = 0x20
+  ALLOWUNDO = 0x40
+  FILESONLY = 0x80
+  SIMPLEPROGRESS = 0x100
+  NOCONFIRMMKDIR = 0x200
+  NOERRORUI = 0x400
+  NOCOPYSECURITYATTRIBS = 0x800
+  NORECURSION = 0x1000
+  NO_CONNECTED_ELEMENTS = 0x2000
+  WANTNUKEWARNING = 0x4000
+  NORECURSEREPARSE = 0x8000
 
 shell32 = ctypes.WinDLL("shell32")
 shell32.SHFileOperationW.restype = ctypes.c_int
@@ -45,11 +49,10 @@ def DeleteFileToRecycleBin(fn):
   sShFileOp = SHFILEOPSTRUCTW()
 
   sShFileOp.hWnd = 0
-  sShFileOp.wFunc = FO_DELETE
+  sShFileOp.wFunc = FO.DELETE
   sShFileOp.pFrom = fn
   sShFileOp.pTo = None
-  sShFileOp.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT
-  # sys.stderr.write("[info] flags=0x%x\n"%sShFileOp.fFlags)
+  sShFileOp.fFlags = FOF.ALLOWUNDO | FOF.NOCONFIRMATION | FOF.NOERRORUI | FOF.SILENT
 
   sShFileOp.fAnyOperationsAborted = 0
   sShFileOp.hNameMappings = None
