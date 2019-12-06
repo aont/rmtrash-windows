@@ -5,7 +5,7 @@ import enum
 
 class SHFILEOPSTRUCTW(ctypes.Structure):
   _fields_ = [
-    ("hwnd", ctypes.c_void_p),
+    ("hwnd", ctypes.c_ulong),
     ("wFunc", ctypes.c_uint),
     ("pFrom", ctypes.c_wchar_p),
     ("pTo", ctypes.c_wchar_p),
@@ -45,19 +45,11 @@ shell32.SHFileOperationW.restype = ctypes.c_int
 shell32.SHFileOperationW.argtypes = (ctypes.POINTER(SHFILEOPSTRUCTW), )
 
 def DeleteFileToRecycleBin(fn):
-
+  
   sShFileOp = SHFILEOPSTRUCTW()
-
-  sShFileOp.hWnd = 0
   sShFileOp.wFunc = FO.DELETE
   sShFileOp.pFrom = fn
-  sShFileOp.pTo = None
   sShFileOp.fFlags = FOF.ALLOWUNDO | FOF.NOCONFIRMATION | FOF.NOERRORUI | FOF.SILENT
-
-  sShFileOp.fAnyOperationsAborted = 0
-  sShFileOp.hNameMappings = None
-  sShFileOp.lpszProgressTitle = None
-
   return shell32.SHFileOperationW(sShFileOp)
 
 if __name__ == '__main__':
