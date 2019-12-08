@@ -5,7 +5,7 @@ import enum
 
 class SHFILEOPSTRUCTW(ctypes.Structure):
   _fields_ = [
-    ("hwnd", ctypes.c_ulong),
+    ("hwnd", ctypes.c_void_p),
     ("wFunc", ctypes.c_uint),
     ("pFrom", ctypes.c_wchar_p),
     ("pTo", ctypes.c_wchar_p),
@@ -61,5 +61,6 @@ if __name__ == '__main__':
     if retcode_i != 0:
       sys.stderr.write("failed to remove %s\n" % fn)
     retcode_sum |= retcode_i
+    sys.stderr.write("[info] error code=%d 0x%x\n" % (retcode_i, retcode_i))
 
   exit(retcode_sum)
