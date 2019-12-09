@@ -4,7 +4,7 @@ import sys
 import enum
 import os
 
-class SHFILEOPSTRUCTA(ctypes.Structure):
+class SHFILEOPSTRUCTW(ctypes.Structure):
   _fields_ = [
     ("hwnd", ctypes.c_void_p),
     ("wFunc", ctypes.c_uint),
@@ -43,17 +43,17 @@ class FOF(enum.IntEnum):
 
 shell32 = ctypes.WinDLL("shell32")
 
-shell32.SHFileOperationA.restype = ctypes.c_int
-shell32.SHFileOperationA.argtypes = (ctypes.POINTER(SHFILEOPSTRUCTA), )
+shell32.SHFileOperationW.restype = ctypes.c_int
+shell32.SHFileOperationW.argtypes = (ctypes.POINTER(SHFILEOPSTRUCTW), )
 
 def DeleteFileToRecycleBin(fn_list):
   
-  sShFileOp = SHFILEOPSTRUCTA()
+  sShFileOp = SHFILEOPSTRUCTW()
   sShFileOp.wFunc = FO.DELETE
   
-  sShFileOp.pFrom = b"\0".join([fn.encode("cp932") for fn in fn_list]) + b'\0\0'
+  sShFileOp.pFrom = ("\0".join(fn_list) + "\0\0").encode("utf-16le")
   sShFileOp.fFlags = FOF.ALLOWUNDO | FOF.NOCONFIRMATION | FOF.NOERRORUI | FOF.SILENT
-  return shell32.SHFileOperationA(sShFileOp)
+  return shell32.SHFileOperationW(sShFileOp)
 
 if __name__ == '__main__':
 
