@@ -2,17 +2,18 @@
 import ctypes
 import sys
 import enum
+import os
 
-class SHFILEOPSTRUCTW(ctypes.Structure):
+class SHFILEOPSTRUCTA(ctypes.Structure):
   _fields_ = [
     ("hwnd", ctypes.c_void_p),
     ("wFunc", ctypes.c_uint),
-    ("pFrom", ctypes.c_wchar_p),
-    ("pTo", ctypes.c_wchar_p),
+    ("pFrom", ctypes.c_char_p),
+    ("pTo", ctypes.c_char_p),
     ("fFlags", ctypes.c_ushort),
     ("fAnyOperationsAborted", ctypes.c_int),
     ("hNameMappings", ctypes.c_void_p),
-    ("lpszProgressTitle", ctypes.c_wchar_p),
+    ("lpszProgressTitle", ctypes.c_char_p),
   ]
 
 class FO(enum.IntEnum):
@@ -41,26 +42,25 @@ class FOF(enum.IntEnum):
   NORECURSEREPARSE = 0x8000
 
 shell32 = ctypes.WinDLL("shell32")
-shell32.SHFileOperationW.restype = ctypes.c_int
-shell32.SHFileOperationW.argtypes = (ctypes.POINTER(SHFILEOPSTRUCTW), )
 
-def DeleteFileToRecycleBin(fn):
+shell32.SHFileOperationA.restype = ctypes.c_int
+shell32.SHFileOperationA.argtypes = (ctypes.POINTER(SHFILEOPSTRUCTA), )
+
+def DeleteFileToRecycleBin(fn_list):
   
-  sShFileOp = SHFILEOPSTRUCTW()
+  sShFileOp = SHFILEOPSTRUCTA()
   sShFileOp.wFunc = FO.DELETE
-  sShFileOp.pFrom = fn
+  
+  sShFileOp.pFrom = b"\0".join([fn.encode("cp932") for fn in fn_list]) + b'\0\0'
   sShFileOp.fFlags = FOF.ALLOWUNDO | FOF.NOCONFIRMATION | FOF.NOERRORUI | FOF.SILENT
-  return shell32.SHFileOperationW(sShFileOp)
+  return shell32.SHFileOperationA(sShFileOp)
 
 if __name__ == '__main__':
 
-  retcode_sum = 0  
-  for i in range(1, len(sys.argv)):
-    fn = sys.argv[i]
-    retcode_i = DeleteFileToRecycleBin(fn)
-    if retcode_i != 0:
-      sys.stderr.write("failed to remove %s\n" % fn)
-    retcode_sum |= retcode_i
-    sys.stderr.write("[info] error code=%d 0x%x\n" % (retcode_i, retcode_i))
+  fn_list = sys.argv[1:]
+  retcode = DeleteFileToRecycleBin(fn_list)
+  if retcode != 0:
+    sys.stderr.write("failed to remove %s\n" % ",".join(fn_list))
+    sys.stderr.write("[info] error code=%d 0x%x\n" % (retcode, retcode))
 
-  exit(retcode_sum)
+  exit(retcode)
