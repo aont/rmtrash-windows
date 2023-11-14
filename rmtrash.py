@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 
 import sys
-from win32comext.shell import shell, shellcon
+import win32comext.shell.shell
+import win32comext.shell.shellcon
 import glob
 
 def glob_path_list(path_list):
@@ -14,13 +15,13 @@ def delete_file_to_recycle_bin(path_list):
 
     path_list = glob_path_list(path_list)
 
-    return shell.SHFileOperation(
+    return win32comext.shell.shell.SHFileOperation(
         (
           0,
-          shellcon.FO_DELETE,
+          win32comext.shell.shellcon.FO_DELETE,
           "\0".join(path_list) + "\0\0",
           None,
-          shellcon.FOF_ALLOWUNDO | shellcon.FOF_NOCONFIRMATION
+          win32comext.shell.shellcon.FOF_ALLOWUNDO | win32comext.shell.shellcon.FOF_NOCONFIRMATION
         )
         # shellcon.FOF_SILENT
     )
