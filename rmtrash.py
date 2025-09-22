@@ -1,18 +1,60 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""
-recycle_cli_no_expand.py
+"""rmtrash - Windows Recycle Bin helper.
 
-- os.path.expandvars / os.path.expanduser を使わない版
-- ワイルドカードのチェックも削除（そのまま渡された文字列を扱います）
-- --status : ごみ箱の合計サイズ / アイテム数を表示 (SHQueryRecycleBinW)
-- --empty  : ごみ箱を空にする (SHEmptyRecycleBinW)
+The module provides both a command-line interface and callable helpers so the
+functionality can be reused from other Python scripts.  Paths are not expanded;
+the literal values supplied by the caller are forwarded to the Windows shell.
+
+* ``--status`` shows the total size and number of items stored in the Recycle
+  Bin using :func:`SHQueryRecycleBinW`.
+* ``--empty`` empties the Recycle Bin using :func:`SHEmptyRecycleBinW`.
+* Positional arguments are moved into the Recycle Bin via
+  :func:`SHFileOperationW`.
 """
 
 import argparse
 import os
 import sys
+from dataclasses import dataclass
+from typing import Iterable, List, Optional, Sequence
+
+__all__ = [
+    "IS_WINDOWS",
+    "RecycleBinError",
+    "RecycleBinStatus",
+    "human_size",
+    "normalize_paths_no_expand",
+    "delete_file_to_recycle_bin",
+    "query_recycle_bin",
+    "empty_recycle_bin",
+    "send_to_recycle_bin",
+    "get_recycle_bin_status",
+    "empty_recycle_bin_with_options",
+    "main",
+]
+
+
+class RecycleBinError(RuntimeError):
+    """Raised when an operation on the Windows Recycle Bin fails."""
+
+    def __init__(self, message: str, *, code: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass(frozen=True)
+class RecycleBinStatus:
+    """Container for the total size and item count stored in the Recycle Bin."""
+
+    size_bytes: int
+    items: int
+
+    def human_readable_size(self) -> str:
+        """Return the size formatted in a human friendly way (e.g. ``1.5GB``)."""
+
+        return human_size(self.size_bytes)
 
 IS_WINDOWS = os.name == "nt"
 
@@ -72,9 +114,18 @@ if IS_WINDOWS:
     FORMAT_MESSAGE_IGNORE_INSERTS = 0x00000200
 
     def explain_win_error(code: int) -> str:
+        """Return a human readable message for a Windows error code."""
+
         buf = ctypes.create_unicode_buffer(1024)
-        n = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                           None, code, 0, buf, len(buf), None)
+        n = FormatMessageW(
+            FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+            None,
+            code,
+            0,
+            buf,
+            len(buf),
+            None,
+        )
         if n:
             return buf.value.strip()
         return f"WinError {code}"
@@ -88,20 +139,37 @@ else:
     def explain_win_error(code: int) -> str:
         return "This function is only available on Windows."
 
+
+def _format_operation_error(operation: str, retcode: int) -> str:
+    """Return a diagnostic message for a failed WinAPI call."""
+
+    message = [f"{operation} failed (code=0x{retcode:x})"]
+    if ctypes is not None:
+        last_error = ctypes.get_last_error()
+        if last_error:
+            message.append(
+                f"last error {last_error}: {explain_win_error(last_error)}"
+            )
+    return "; ".join(message)
+
 def human_size(n: int) -> str:
-    for unit in ("B","KB","MB","GB","TB"):
+    """Return ``n`` formatted as a human readable size string."""
+
+    for unit in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024 or unit == "TB":
             return f"{n:.1f}{unit}"
         n /= 1024.0
     return f"{n:.1f}PB"
 
 # ---------- パス正規化（ただし expandvars/expanduser は行わない） ----------
-def normalize_paths_no_expand(path_list):
+def normalize_paths_no_expand(path_list: Iterable[str]) -> List[str]:
+    """Normalise ``path_list`` without expanding environment variables.
+
+    The function returns absolute, normalised paths while keeping the
+    original order and removing duplicates.
     """
-    - 環境変数展開や ~ 展開は行わない
-    - 引数として渡された文字列を絶対化・正規化し、重複を排除して返す
-    """
-    normalized = []
+
+    normalized: List[str] = []
     seen = set()
     for p in path_list:
         # ここで expandvars/expanduser は行わない（そのまま扱う）
@@ -115,6 +183,8 @@ def normalize_paths_no_expand(path_list):
 if IS_WINDOWS:
     # ---------- 主機能: ファイルをごみ箱へ ----------
     def delete_file_to_recycle_bin(path_list, flags=FOF_ALLOWUNDO | FOF_NOCONFIRMATION):
+        """Low level wrapper around :func:`SHFileOperationW`."""
+
         path_list = normalize_paths_no_expand(path_list)
         if not path_list:
             return (0, False)
@@ -134,6 +204,8 @@ if IS_WINDOWS:
 
     # ---------- ごみ箱情報照会 ----------
     def query_recycle_bin():
+        """Low level wrapper around :func:`SHQueryRecycleBinW`."""
+
         info = SHQUERYRBINFO()
         info.cbSize = ctypes.sizeof(SHQUERYRBINFO)
         hr = SHQueryRecycleBinW(None, ctypes.byref(info))
@@ -141,6 +213,8 @@ if IS_WINDOWS:
 
     # ---------- ごみ箱を空にする ----------
     def empty_recycle_bin(no_confirmation=True, no_progress=True, no_sound=True):
+        """Low level wrapper around :func:`SHEmptyRecycleBinW`."""
+
         flags = 0
         if no_confirmation:
             flags |= SHERB_NOCONFIRMATION
@@ -152,22 +226,134 @@ if IS_WINDOWS:
         return hr
 else:
     def delete_file_to_recycle_bin(path_list, flags=0):
+        """Placeholder for non-Windows platforms."""
+
         raise OSError("rmtrash is only available on Windows.")
 
     def query_recycle_bin():
+        """Placeholder for non-Windows platforms."""
+
         raise OSError("rmtrash is only available on Windows.")
 
     def empty_recycle_bin(no_confirmation=True, no_progress=True, no_sound=True):
+        """Placeholder for non-Windows platforms."""
+
         raise OSError("rmtrash is only available on Windows.")
 
+# ---------- Public helpers ----------
+
+
+def send_to_recycle_bin(
+    paths: Sequence[str],
+    *,
+    allow_undo: bool = True,
+    suppress_confirmation: bool = True,
+) -> bool:
+    """Move ``paths`` to the Windows Recycle Bin.
+
+    Parameters
+    ----------
+    paths:
+        Files or directories to move.  The values are not expanded and are
+        forwarded to the Windows shell as-is.
+    allow_undo:
+        When ``True`` (the default) the delete operation allows the standard
+        "undo" behaviour provided by the shell.
+    suppress_confirmation:
+        When ``True`` (the default) confirmation prompts are disabled.
+
+    Returns
+    -------
+    bool
+        ``True`` if the operation completed without being aborted by the user.
+
+    Raises
+    ------
+    RecycleBinError
+        If the underlying Windows API reports an error or the platform is not
+        Windows.
+    """
+
+    flags = 0
+    if allow_undo:
+        flags |= FOF_ALLOWUNDO
+    if suppress_confirmation:
+        flags |= FOF_NOCONFIRMATION
+
+    try:
+        retcode, aborted = delete_file_to_recycle_bin(paths, flags=flags)
+    except OSError as exc:
+        raise RecycleBinError(str(exc)) from exc
+
+    if retcode != 0:
+        raise RecycleBinError(
+            _format_operation_error("Moving files to the Recycle Bin", retcode),
+            code=retcode,
+        )
+
+    return not aborted
+
+
+def get_recycle_bin_status() -> RecycleBinStatus:
+    """Return the current status of the Windows Recycle Bin."""
+
+    try:
+        hr, size, items = query_recycle_bin()
+    except OSError as exc:
+        raise RecycleBinError(str(exc)) from exc
+
+    if hr != 0:
+        raise RecycleBinError(
+            _format_operation_error("Querying the Recycle Bin", hr),
+            code=hr,
+        )
+
+    return RecycleBinStatus(size_bytes=size, items=items)
+
+
+def empty_recycle_bin_with_options(
+    *,
+    require_confirmation: bool = False,
+    show_progress: bool = False,
+    play_sound: bool = True,
+) -> None:
+    """Empty the Recycle Bin with additional options.
+
+    Parameters mirror the flags exposed by :func:`SHEmptyRecycleBinW`.  An
+    exception is raised when the operation cannot be completed.
+    """
+
+    try:
+        hr = empty_recycle_bin(
+            no_confirmation=not require_confirmation,
+            no_progress=not show_progress,
+            no_sound=not play_sound,
+        )
+    except OSError as exc:
+        raise RecycleBinError(str(exc)) from exc
+
+    if hr != 0:
+        raise RecycleBinError(
+            _format_operation_error("Emptying the Recycle Bin", hr),
+            code=hr,
+        )
+
+
 # ---------- CLI ----------
+#
+# The helpers above are exposed for use as a Python module.  The CLI is a thin
+# wrapper around them.
+
+
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
     if not IS_WINDOWS:
         sys.stderr.write("This script runs on Windows only.\n")
         return 1
-    p = argparse.ArgumentParser(description="Recycle bin helper (no expandvars/expanduser, no wildcard checks).")
+    p = argparse.ArgumentParser(
+        description="Recycle Bin helper for Windows (no expandvars/expanduser, no wildcard checks)."
+    )
     p.add_argument("paths", nargs="*", help="Literal files/directories (no expansion is performed).")
     p.add_argument("--status", action="store_true", help="Show recycle bin total size and item count (SHQueryRecycleBinW)")
     p.add_argument("--empty", action="store_true", help="Empty the recycle bin (SHEmptyRecycleBinW). WARNING: uses NOCONFIRMATION|NOPROGRESSUI by default.")
@@ -178,13 +364,16 @@ def main(argv=None):
 
     # --status
     if args.status:
-        hr, size, nitems = query_recycle_bin()
-        if hr != 0:
-            sys.stderr.write(f"Failed to query recycle bin: hr=0x{hr:x} {explain_win_error(ctypes.get_last_error())}\n")
-            return 1
+        try:
+            status = get_recycle_bin_status()
+        except RecycleBinError as exc:
+            sys.stderr.write(f"{exc}\n")
+            return exc.code or 1
         print("Recycle Bin status:")
-        print(f"  items : {nitems}")
-        print(f"  size  : {size} bytes ({human_size(size)})")
+        print(f"  items : {status.items}")
+        print(
+            f"  size  : {status.size_bytes} bytes ({status.human_readable_size()})"
+        )
 
     # --empty
     if args.empty:
@@ -197,30 +386,35 @@ def main(argv=None):
                 print("Aborted by user.")
                 return 0
 
-        hr = empty_recycle_bin(no_confirmation=no_confirmation, no_progress=True, no_sound=no_sound)
-        if hr != 0:
-            err_msg = explain_win_error(ctypes.get_last_error())
-            sys.stderr.write(f"Failed to empty recycle bin: hr=0x{hr:x} {err_msg}\n")
-            return 1
+        try:
+            empty_recycle_bin_with_options(
+                require_confirmation=args.confirm_empty,
+                show_progress=False,
+                play_sound=not no_sound,
+            )
+        except RecycleBinError as exc:
+            sys.stderr.write(f"{exc}\n")
+            return exc.code or 1
         else:
             print("Recycle Bin emptied.")
 
     # delete paths -> recycle bin
     if args.paths:
         try:
-            retcode, aborted = delete_file_to_recycle_bin(args.paths, flags=FOF_ALLOWUNDO | FOF_NOCONFIRMATION)
-        except Exception as e:
-            sys.stderr.write(f"Argument error: {e}\n")
-            return 2
-        if retcode != 0:
-            sys.stderr.write("failed to remove %s\n" % ",".join(args.paths))
-            sys.stderr.write("[info] error code=%d 0x%x\n" % (retcode, retcode))
-            err_msg = explain_win_error(ctypes.get_last_error())
-            sys.stderr.write(f"[info] last error: {err_msg}\n")
-            return retcode
+            completed = send_to_recycle_bin(
+                args.paths,
+                allow_undo=True,
+                suppress_confirmation=True,
+            )
+        except RecycleBinError as exc:
+            sys.stderr.write(f"{exc}\n")
+            return exc.code or 1
         else:
             if args.verbose:
-                print("Moved to recycle bin:", ", ".join(args.paths))
+                if completed:
+                    print("Moved to recycle bin:", ", ".join(args.paths))
+                else:
+                    print("Recycle Bin operation was aborted by the shell.")
             return 0
 
     # 何も指定が無ければヘルプ表示

@@ -1,14 +1,23 @@
 # rmtrash-windows
 
-`rmtrash-windows` is a command-line tool that lets you manage the Windows Recycle Bin directly from a terminal. It provides a fast, scriptable alternative to interacting with the graphical interface.
+`rmtrash-windows` is a command-line tool **and** importable Python module that
+lets you manage the Windows Recycle Bin without leaving the terminal. It uses
+the Windows shell APIs underneath, so files are sent to the Recycle Bin instead
+of being permanently removed.
 
-> **Note:** This tool is designed for Windows only. Running it on other operating systems will result in an error.
+> **Note:** The functionality is only available on Windows. Importing or running
+> the CLI on other platforms raises an error.
 
 ## Features
 
-- Move specified files and folders to the Recycle Bin instead of deleting them permanently.
-- Inspect the total size and item count currently stored in the Recycle Bin.
-- Empty the Recycle Bin, with optional confirmation and sound settings.
+- Move files or directories to the Recycle Bin from the terminal or your own
+  Python scripts.
+- Inspect the total size and number of items currently stored in the Recycle
+  Bin.
+- Empty the Recycle Bin with optional confirmation prompts and sound control.
+
+All operations forward the literal paths you provide; environment variables and
+``~`` are not expanded automatically.
 
 ## Installation
 
@@ -16,9 +25,9 @@
 pip install git+https://github.com/aont/rmtrash-windows.git
 ```
 
-After installation, the `rmtrash` command becomes available.
+After installation the ``rmtrash`` command becomes available.
 
-## Usage
+## Command-line usage
 
 ```bash
 rmtrash [PATH ...]
@@ -26,51 +35,56 @@ rmtrash --status
 rmtrash --empty [--confirm-empty] [--no-sound]
 ```
 
-## Managing the Windows Recycle Bin
+- Supplying one or more ``PATH`` values moves them to the Recycle Bin. The
+  command exits successfully even if the user aborts the shell operation.
+- ``--status`` prints the total item count and size currently stored in the
+  Recycle Bin.
+- ``--empty`` clears the Recycle Bin. ``--confirm-empty`` adds an interactive
+  confirmation step, while ``--no-sound`` disables the sound effect.
 
-Managing the Windows Recycle Bin usually requires manual steps through the desktop interface. However, with Python, it is possible to automate this process and create a command-line tool. The script `recycle_cli_no_expand.py` demonstrates how to interact with the Recycle Bin directly using the Windows API through the `ctypes` library.
+Example:
 
-### Key Features
+```bash
+# Show statistics about the Recycle Bin.
+rmtrash --status
 
-1. **Delete files to the Recycle Bin**  
-   Instead of permanently removing files, this tool sends them to the Recycle Bin using the Windows API (`SHFileOperationW`). It ensures that files can be recovered later if needed.
+# Move two files to the Recycle Bin.
+rmtrash C:\\temp\\report.txt D:\\archive\\old.log
 
-2. **Check Recycle Bin status**  
-   By calling `SHQueryRecycleBinW`, the script can display the total number of items and their combined size currently in the Recycle Bin.
+# Empty the Recycle Bin after confirming in the terminal.
+rmtrash --empty --confirm-empty
+```
 
-3. **Empty the Recycle Bin**  
-   The tool allows users to clear the Recycle Bin completely with `SHEmptyRecycleBinW`. Options are available to suppress confirmation dialogs, progress windows, and sounds.
+## Python API
 
-### Design Details
+The same functionality can be reused from Python code:
 
-- The script avoids expanding environment variables (`os.path.expandvars`) and user directories (`os.path.expanduser`). It only processes the literal paths given by the user.
-- Paths are normalized and duplicates removed before they are sent to the API.
-- Error handling is built in: if an API call fails, the tool fetches the corresponding Windows error message for clarity.
-- The script uses command-line arguments to control its behavior. For example:
-  - `--status` shows the Recycle Bin size and item count.
-  - `--empty` clears it.
-  - Providing file or folder paths moves them to the Recycle Bin.
+```python
+from rmtrash import (
+    RecycleBinError,
+    empty_recycle_bin_with_options,
+    get_recycle_bin_status,
+    send_to_recycle_bin,
+)
 
-### Usage Examples
+status = get_recycle_bin_status()
+print(f"Items: {status.items}, Size: {status.human_readable_size()}")
 
-- Check the current Recycle Bin status:
+try:
+    send_to_recycle_bin([r"C:\\temp\\report.txt"])
+    empty_recycle_bin_with_options(play_sound=False)
+except RecycleBinError as exc:
+    print(f"Recycle Bin operation failed: {exc}")
+```
 
-  ```bash
-  python recycle_cli_no_expand.py --status
-  ```
+- :func:`send_to_recycle_bin` moves files and directories to the Recycle Bin.
+- :func:`get_recycle_bin_status` returns a ``RecycleBinStatus`` dataclass with
+  the item count and total size. Use ``human_readable_size()`` for a friendly
+  representation.
+- :func:`empty_recycle_bin_with_options` empties the Recycle Bin while letting
+  you control confirmation prompts, progress UI and sounds.
+- Errors raise :class:`RecycleBinError`; the ``code`` attribute contains the
+  underlying Windows return value when available.
 
-- Empty the Recycle Bin without confirmation or sounds:
-
-  ```bash
-  python recycle_cli_no_expand.py --empty --no-sound
-  ```
-
-- Move files into the Recycle Bin:
-
-  ```bash
-  python recycle_cli_no_expand.py file1.txt folder2
-  ```
-
-### Conclusion
-
-This script is a practical example of how Python can work closely with the Windows API. It provides a fast, command-line way to manage the Recycle Bin, making it useful for developers, system administrators, or anyone who prefers automation over manual cleanup.
+These helpers all forward the literal paths you pass in and raise
+``RecycleBinError`` if the current platform is not Windows.
