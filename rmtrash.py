@@ -10,75 +10,83 @@ recycle_cli_no_expand.py
 - --empty  : ごみ箱を空にする (SHEmptyRecycleBinW)
 """
 
-import sys
-import os
 import argparse
-import ctypes
-from ctypes import wintypes
+import os
+import sys
 
-# ---------- Windows チェック ----------
-if os.name != "nt":
-    sys.stderr.write("This script runs on Windows only.\n")
-    sys.exit(1)
+IS_WINDOWS = os.name == "nt"
 
-# ---------- WinAPI 定数 ----------
-FO_DELETE = 3
-FOF_ALLOWUNDO = 0x0040
-FOF_NOCONFIRMATION = 0x0010
+if IS_WINDOWS:
+    import ctypes
+    from ctypes import wintypes
 
-SHERB_NOCONFIRMATION = 0x00000001
-SHERB_NOPROGRESSUI   = 0x00000002
-SHERB_NOSOUND        = 0x00000004
+    # ---------- WinAPI 定数 ----------
+    FO_DELETE = 3
+    FOF_ALLOWUNDO = 0x0040
+    FOF_NOCONFIRMATION = 0x0010
 
-# ---------- ctypes 用意 ----------
-shell32 = ctypes.WinDLL("shell32", use_last_error=True)
-kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    SHERB_NOCONFIRMATION = 0x00000001
+    SHERB_NOPROGRESSUI   = 0x00000002
+    SHERB_NOSOUND        = 0x00000004
 
-class SHFILEOPSTRUCTW(ctypes.Structure):
-    _fields_ = [
-        ("hwnd", wintypes.HWND),
-        ("wFunc", wintypes.UINT),
-        ("pFrom", wintypes.LPCWSTR),
-        ("pTo", wintypes.LPCWSTR),
-        ("fFlags", wintypes.UINT),
-        ("fAnyOperationsAborted", wintypes.BOOL),
-        ("hNameMappings", wintypes.LPVOID),
-        ("lpszProgressTitle", wintypes.LPCWSTR),
-    ]
+    # ---------- ctypes 用意 ----------
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
-SHFileOperationW = shell32.SHFileOperationW
-SHFileOperationW.argtypes = [ctypes.POINTER(SHFILEOPSTRUCTW)]
-SHFileOperationW.restype  = ctypes.c_int
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [
+            ("hwnd", wintypes.HWND),
+            ("wFunc", wintypes.UINT),
+            ("pFrom", wintypes.LPCWSTR),
+            ("pTo", wintypes.LPCWSTR),
+            ("fFlags", wintypes.UINT),
+            ("fAnyOperationsAborted", wintypes.BOOL),
+            ("hNameMappings", wintypes.LPVOID),
+            ("lpszProgressTitle", wintypes.LPCWSTR),
+        ]
 
-class SHQUERYRBINFO(ctypes.Structure):
-    _fields_ = [
-        ("cbSize", wintypes.DWORD),
-        ("i64Size", ctypes.c_ulonglong),
-        ("i64NumItems", ctypes.c_ulonglong),
-    ]
+    SHFileOperationW = shell32.SHFileOperationW
+    SHFileOperationW.argtypes = [ctypes.POINTER(SHFILEOPSTRUCTW)]
+    SHFileOperationW.restype  = ctypes.c_int
 
-SHQueryRecycleBinW = shell32.SHQueryRecycleBinW
-SHQueryRecycleBinW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(SHQUERYRBINFO)]
-SHQueryRecycleBinW.restype  = ctypes.c_long  # HRESULT
+    class SHQUERYRBINFO(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("i64Size", ctypes.c_ulonglong),
+            ("i64NumItems", ctypes.c_ulonglong),
+        ]
 
-SHEmptyRecycleBinW = shell32.SHEmptyRecycleBinW
-SHEmptyRecycleBinW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.DWORD]
-SHEmptyRecycleBinW.restype  = ctypes.c_long  # HRESULT
+    SHQueryRecycleBinW = shell32.SHQueryRecycleBinW
+    SHQueryRecycleBinW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(SHQUERYRBINFO)]
+    SHQueryRecycleBinW.restype  = ctypes.c_long  # HRESULT
 
-FormatMessageW = kernel32.FormatMessageW
-FormatMessageW.argtypes = [wintypes.DWORD, wintypes.LPCVOID, wintypes.DWORD,
-                           wintypes.DWORD, wintypes.LPWSTR, wintypes.DWORD, wintypes.LPVOID]
-FormatMessageW.restype  = wintypes.DWORD
-FORMAT_MESSAGE_FROM_SYSTEM = 0x00001000
-FORMAT_MESSAGE_IGNORE_INSERTS = 0x00000200
+    SHEmptyRecycleBinW = shell32.SHEmptyRecycleBinW
+    SHEmptyRecycleBinW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.DWORD]
+    SHEmptyRecycleBinW.restype  = ctypes.c_long  # HRESULT
 
-def explain_win_error(code: int) -> str:
-    buf = ctypes.create_unicode_buffer(1024)
-    n = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                       None, code, 0, buf, len(buf), None)
-    if n:
-        return buf.value.strip()
-    return f"WinError {code}"
+    FormatMessageW = kernel32.FormatMessageW
+    FormatMessageW.argtypes = [wintypes.DWORD, wintypes.LPCVOID, wintypes.DWORD,
+                               wintypes.DWORD, wintypes.LPWSTR, wintypes.DWORD, wintypes.LPVOID]
+    FormatMessageW.restype  = wintypes.DWORD
+    FORMAT_MESSAGE_FROM_SYSTEM = 0x00001000
+    FORMAT_MESSAGE_IGNORE_INSERTS = 0x00000200
+
+    def explain_win_error(code: int) -> str:
+        buf = ctypes.create_unicode_buffer(1024)
+        n = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                           None, code, 0, buf, len(buf), None)
+        if n:
+            return buf.value.strip()
+        return f"WinError {code}"
+else:
+    ctypes = None
+    wintypes = None
+
+    FO_DELETE = FOF_ALLOWUNDO = FOF_NOCONFIRMATION = 0
+    SHERB_NOCONFIRMATION = SHERB_NOPROGRESSUI = SHERB_NOSOUND = 0
+
+    def explain_win_error(code: int) -> str:
+        return "This function is only available on Windows."
 
 def human_size(n: int) -> str:
     for unit in ("B","KB","MB","GB","TB"):
@@ -104,48 +112,61 @@ def normalize_paths_no_expand(path_list):
             seen.add(norm_p)
     return normalized
 
-# ---------- 主機能: ファイルをごみ箱へ ----------
-def delete_file_to_recycle_bin(path_list, flags=FOF_ALLOWUNDO | FOF_NOCONFIRMATION):
-    path_list = normalize_paths_no_expand(path_list)
-    if not path_list:
-        return (0, False)
-    # SHFileOperation に渡す文字列は double-null terminated list
-    from_buf = ("\0".join(path_list) + "\0\0")
-    file_op = SHFILEOPSTRUCTW()
-    file_op.hwnd = 0
-    file_op.wFunc = FO_DELETE
-    file_op.pFrom = from_buf
-    file_op.pTo = None
-    file_op.fFlags = flags
-    file_op.fAnyOperationsAborted = False
-    file_op.hNameMappings = None
-    file_op.lpszProgressTitle = None
-    ret = SHFileOperationW(ctypes.byref(file_op))
-    return (ret, bool(file_op.fAnyOperationsAborted))
+if IS_WINDOWS:
+    # ---------- 主機能: ファイルをごみ箱へ ----------
+    def delete_file_to_recycle_bin(path_list, flags=FOF_ALLOWUNDO | FOF_NOCONFIRMATION):
+        path_list = normalize_paths_no_expand(path_list)
+        if not path_list:
+            return (0, False)
+        # SHFileOperation に渡す文字列は double-null terminated list
+        from_buf = ("\0".join(path_list) + "\0\0")
+        file_op = SHFILEOPSTRUCTW()
+        file_op.hwnd = 0
+        file_op.wFunc = FO_DELETE
+        file_op.pFrom = from_buf
+        file_op.pTo = None
+        file_op.fFlags = flags
+        file_op.fAnyOperationsAborted = False
+        file_op.hNameMappings = None
+        file_op.lpszProgressTitle = None
+        ret = SHFileOperationW(ctypes.byref(file_op))
+        return (ret, bool(file_op.fAnyOperationsAborted))
 
-# ---------- ごみ箱情報照会 ----------
-def query_recycle_bin():
-    info = SHQUERYRBINFO()
-    info.cbSize = ctypes.sizeof(SHQUERYRBINFO)
-    hr = SHQueryRecycleBinW(None, ctypes.byref(info))
-    return (hr, info.i64Size, info.i64NumItems)
+    # ---------- ごみ箱情報照会 ----------
+    def query_recycle_bin():
+        info = SHQUERYRBINFO()
+        info.cbSize = ctypes.sizeof(SHQUERYRBINFO)
+        hr = SHQueryRecycleBinW(None, ctypes.byref(info))
+        return (hr, info.i64Size, info.i64NumItems)
 
-# ---------- ごみ箱を空にする ----------
-def empty_recycle_bin(no_confirmation=True, no_progress=True, no_sound=True):
-    flags = 0
-    if no_confirmation:
-        flags |= SHERB_NOCONFIRMATION
-    if no_progress:
-        flags |= SHERB_NOPROGRESSUI
-    if no_sound:
-        flags |= SHERB_NOSOUND
-    hr = SHEmptyRecycleBinW(0, None, flags)
-    return hr
+    # ---------- ごみ箱を空にする ----------
+    def empty_recycle_bin(no_confirmation=True, no_progress=True, no_sound=True):
+        flags = 0
+        if no_confirmation:
+            flags |= SHERB_NOCONFIRMATION
+        if no_progress:
+            flags |= SHERB_NOPROGRESSUI
+        if no_sound:
+            flags |= SHERB_NOSOUND
+        hr = SHEmptyRecycleBinW(0, None, flags)
+        return hr
+else:
+    def delete_file_to_recycle_bin(path_list, flags=0):
+        raise OSError("rmtrash is only available on Windows.")
+
+    def query_recycle_bin():
+        raise OSError("rmtrash is only available on Windows.")
+
+    def empty_recycle_bin(no_confirmation=True, no_progress=True, no_sound=True):
+        raise OSError("rmtrash is only available on Windows.")
 
 # ---------- CLI ----------
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
+    if not IS_WINDOWS:
+        sys.stderr.write("This script runs on Windows only.\n")
+        return 1
     p = argparse.ArgumentParser(description="Recycle bin helper (no expandvars/expanduser, no wildcard checks).")
     p.add_argument("paths", nargs="*", help="Literal files/directories (no expansion is performed).")
     p.add_argument("--status", action="store_true", help="Show recycle bin total size and item count (SHQueryRecycleBinW)")
