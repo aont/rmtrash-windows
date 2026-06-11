@@ -1,0 +1,9 @@
+rmtrash.exe
+*.o
+*.obj
+*.exe.stackdump
+__pycache__/
+*.py[cod]
+/dist/
+/build/
+/*.egg-info/
