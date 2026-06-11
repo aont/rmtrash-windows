@@ -373,6 +373,12 @@ bool confirm_empty() {
     std::string response;
     std::getline(std::cin, response);
 
+    auto is_not_space = [](unsigned char ch) { return !std::isspace(ch); };
+    response.erase(response.begin(),
+                   std::find_if(response.begin(), response.end(), is_not_space));
+    response.erase(std::find_if(response.rbegin(), response.rend(), is_not_space).base(),
+                   response.end());
+
     std::transform(response.begin(), response.end(), response.begin(),
                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
 
