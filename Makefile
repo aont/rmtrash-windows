@@ -1,10 +1,10 @@
-CXX ?= g++
+CC ?= gcc
 PREFIX ?= /ucrt64
 TARGET ?= rmtrash.exe
-SRC := src/rmtrash.cpp
+SRC := src/rmtrash.c
 
 CPPFLAGS ?=
-CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra
+CFLAGS ?= -std=c11 -O2 -Wall -Wextra
 LDFLAGS ?=
 LDLIBS := -lshell32
 
@@ -13,7 +13,7 @@ LDLIBS := -lshell32
 all: $(TARGET)
 
 $(TARGET): $(SRC)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ $< $(LDFLAGS) $(LDLIBS)
 
 install: $(TARGET)
 	install -d "$(DESTDIR)$(PREFIX)/bin"
