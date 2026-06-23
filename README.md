@@ -1,8 +1,7 @@
 # rmtrash-windows
 
 `rmtrash-windows` is a Windows Recycle Bin helper. The repository now contains a
-native C command-line implementation for MSYS2 UCRT64 and MSVC and keeps the
-original Python module for script reuse.
+native C command-line implementation for MSYS2 UCRT64 and MSVC.
 
 The native CLI uses Windows Shell APIs directly, so files are sent to the
 Recycle Bin instead of being permanently removed.
@@ -15,7 +14,6 @@ Recycle Bin instead of being permanently removed.
 - Inspect the total size and number of items currently stored in the Recycle Bin.
 - Empty the Recycle Bin with optional terminal confirmation and sound control.
 - Parse native CLI options with `getopt_long`.
-- Reuse the original Python helpers from scripts when needed.
 
 All operations forward the literal paths you provide. `rmtrash` normalizes paths
 to absolute Windows paths, but it does not expand environment variables, `~`, or
