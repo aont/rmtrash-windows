@@ -1,0 +1,16 @@
+CC = cl
+TARGET = rmtrash.exe
+SRC = src\rmtrash.c
+
+CFLAGS = /nologo /std:c11 /O2 /W4 /D_CRT_SECURE_NO_WARNINGS
+CPPFLAGS =
+LDFLAGS = /nologo
+LDLIBS = shell32.lib getopt.lib
+
+all: $(TARGET)
+
+$(TARGET): $(SRC)
+	$(CC) $(CPPFLAGS) $(CFLAGS) /Fe:$@ $(SRC) /link $(LDFLAGS) $(LDLIBS)
+
+clean:
+	-del /Q $(TARGET) rmtrash.obj 2>NUL

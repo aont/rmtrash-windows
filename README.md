@@ -1,8 +1,8 @@
 # rmtrash-windows
 
 `rmtrash-windows` is a Windows Recycle Bin helper. The repository now contains a
-native C++ command-line implementation for MSYS2 UCRT64 and keeps the original
-Python module for script reuse.
+native C command-line implementation for MSYS2 UCRT64 and MSVC and keeps the
+original Python module for script reuse.
 
 The native CLI uses Windows Shell APIs directly, so files are sent to the
 Recycle Bin instead of being permanently removed.
@@ -21,7 +21,7 @@ All operations forward the literal paths you provide. `rmtrash` normalizes paths
 to absolute Windows paths, but it does not expand environment variables, `~`, or
 wildcards by itself.
 
-## MSYS2 UCRT64 C++ build
+## MSYS2 UCRT64 build
 
 Install the UCRT64 toolchain from an MSYS2 UCRT64 shell:
 
@@ -34,7 +34,7 @@ Build the native command:
 ```bash
 git clone https://github.com/aont/rmtrash-windows.git
 cd rmtrash-windows
-make
+make -f Makefile.mingw
 ```
 
 This produces `rmtrash.exe` in the repository root.
@@ -42,13 +42,43 @@ This produces `rmtrash.exe` in the repository root.
 Install it into `/ucrt64/bin`:
 
 ```bash
-make install
+make -f Makefile.mingw install
 ```
 
 Override the install prefix if needed:
 
 ```bash
-make PREFIX=/usr/local install
+make -f Makefile.mingw PREFIX=/usr/local install
+```
+
+
+## MSVC NMAKE build
+
+Install Microsoft Visual Studio or Build Tools for Visual Studio, then open a
+Developer Command Prompt so `cl` and `nmake` are available.
+
+`rmtrash` uses `getopt_long`, which is not provided by MSVC. Before building,
+clone and prepare [`getopt-msvc-helper`](https://github.com/aont/getopt-msvc-helper),
+then add its `include` and `lib` directories to the MSVC environment.
+
+```cmd
+git clone https://github.com/aont/getopt-msvc-helper.git C:\src\getopt-msvc-helper
+set INCLUDE=%INCLUDE%;C:\src\getopt-msvc-helper\include
+set LIB=%LIB%;C:\src\getopt-msvc-helper\lib
+```
+
+Build the native command with NMAKE:
+
+```cmd
+git clone https://github.com/aont/rmtrash-windows.git
+cd rmtrash-windows
+nmake /f Makefile.msvc
+```
+
+This produces `rmtrash.exe` in the repository root. Remove generated files with:
+
+```cmd
+nmake /f Makefile.msvc clean
 ```
 
 ## Command-line usage
@@ -88,7 +118,7 @@ rmtrash --empty --no-sound
 
 ## Native implementation notes
 
-The C++ CLI calls these Windows APIs:
+The C CLI calls these Windows APIs:
 
 - `SHFileOperationW` with `FO_DELETE | FOF_ALLOWUNDO` for Recycle Bin moves.
 - `SHQueryRecycleBinW` for status queries.
