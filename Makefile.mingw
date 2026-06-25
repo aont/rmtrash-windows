@@ -4,7 +4,7 @@ TARGET ?= rmtrash.exe
 SRC := src/rmtrash.c
 
 CPPFLAGS ?=
-CFLAGS ?= -std=c11 -O2 -Wall -Wextra
+CFLAGS ?= -std=c11 -O2 -Wall -Wextra -DWIN32_LEAN_AND_MEAN
 LDFLAGS ?=
 LDLIBS := -lshell32
 
