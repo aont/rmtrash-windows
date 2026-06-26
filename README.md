@@ -1,7 +1,7 @@
 # rmtrash-windows
 
 `rmtrash-windows` is a Windows Recycle Bin helper. The repository now contains a
-native C command-line implementation for MSYS2 UCRT64 and MSVC.
+native C command-line implementation for MSYS2 UCRT64 and MSVC. The executable is linked without the C runtime startup or default runtime libraries.
 
 The native CLI uses Windows Shell APIs directly, so files are sent to the
 Recycle Bin instead of being permanently removed.
@@ -13,7 +13,7 @@ Recycle Bin instead of being permanently removed.
 - Move files or directories to the Recycle Bin from the terminal.
 - Inspect the total size and number of items currently stored in the Recycle Bin.
 - Empty the Recycle Bin with optional terminal confirmation and sound control.
-- Parse native CLI options with `getopt_long`.
+- Parse native CLI options directly from the Windows command line without a C runtime dependency.
 
 All operations forward the literal paths you provide. `rmtrash` normalizes paths
 to absolute Windows paths, but it does not expand environment variables, `~`, or
@@ -54,16 +54,6 @@ make -f Makefile.mingw PREFIX=/usr/local install
 
 Install Microsoft Visual Studio or Build Tools for Visual Studio, then open a
 Developer Command Prompt so `cl` and `nmake` are available.
-
-`rmtrash` uses `getopt_long`, which is not provided by MSVC. Before building,
-clone and prepare [`getopt-msvc-helper`](https://github.com/aont/getopt-msvc-helper),
-then add its `include` and `lib` directories to the MSVC environment.
-
-```cmd
-git clone https://github.com/aont/getopt-msvc-helper.git C:\src\getopt-msvc-helper
-set INCLUDE=%INCLUDE%;C:\src\getopt-msvc-helper\include
-set LIB=%LIB%;C:\src\getopt-msvc-helper\lib
-```
 
 Build the native command with NMAKE:
 
@@ -122,5 +112,4 @@ The C CLI calls these Windows APIs:
 - `SHQueryRecycleBinW` for status queries.
 - `SHEmptyRecycleBinW` for emptying the Recycle Bin.
 
-MSYS2 UCRT64 normally passes command-line arguments as UTF-8. The implementation
-converts arguments to UTF-16 before calling the wide-character Windows APIs.
+The implementation reads the Unicode Windows command line with `CommandLineToArgvW`, uses Win32 heap and console APIs instead of C runtime allocation and stdio, and exposes `mainCRTStartup` as the process entry point so the build can pass `-nodefaultlibs -nostartfiles` or `/NODEFAULTLIB`.

@@ -2,10 +2,10 @@ CC = cl
 TARGET = rmtrash.exe
 SRC = src\rmtrash.c
 
-CFLAGS = /nologo /std:c11 /O2 /W4 /DWIN32_LEAN_AND_MEAN
+CFLAGS = /nologo /std:c11 /O2 /W4 /DWIN32_LEAN_AND_MEAN /GS-
 CPPFLAGS =
-LDFLAGS = /nologo
-LDLIBS = shell32.lib getopt.lib
+LDFLAGS = /nologo /NODEFAULTLIB /ENTRY:mainCRTStartup /SUBSYSTEM:CONSOLE
+LDLIBS = shell32.lib kernel32.lib
 
 all: $(TARGET)
 

@@ -4,9 +4,9 @@ TARGET ?= rmtrash.exe
 SRC := src/rmtrash.c
 
 CPPFLAGS ?=
-CFLAGS ?= -std=c11 -O2 -Wall -Wextra -DWIN32_LEAN_AND_MEAN
-LDFLAGS ?=
-LDLIBS := -lshell32
+CFLAGS ?= -std=c11 -O2 -Wall -Wextra -DWIN32_LEAN_AND_MEAN -ffreestanding -fno-stack-protector
+LDFLAGS ?= -nostartfiles -nodefaultlibs -Wl,-e,mainCRTStartup
+LDLIBS := -lshell32 -lkernel32
 
 .PHONY: all clean install
 
