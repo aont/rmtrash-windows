@@ -16,11 +16,24 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set release tag
         id: release_tag
         shell: bash
-        run: echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+        run: |
+          latest_tag=$(git tag -l 'v1.0.*' --sort=-v:refname | grep -E '^v1\.0\.[0-9]+$' | head -n 1)
+          if [[ -z "$latest_tag" ]]; then
+            latest_tag="v1.0.0"
+          fi
+
+          patch=${latest_tag##*.}
+          next_patch=$((patch + 1))
+          tag="v1.0.${next_patch}"
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $tag"
 
       - name: Set up MSYS2 UCRT64
         uses: msys2/setup-msys2@v2
