@@ -23,15 +23,21 @@ jobs:
         id: release_tag
         shell: bash
         run: |
-          latest_tag=$(git tag -l 'v1.0.*' --sort=-v:refname | grep -E '^v1\.0\.[0-9]+$' | head -n 1)
+          set -euo pipefail
+
+          series_prefix="v1.0"
+          latest_tag="$(git tag --list "${series_prefix}.*" --sort=-v:refname | head -n 1)"
+
           if [[ -z "$latest_tag" ]]; then
-            latest_tag="v1.0.0"
+            next_patch=0
+          elif [[ "$latest_tag" =~ ^${series_prefix}\.([0-9]+)$ ]]; then
+            next_patch=$((${BASH_REMATCH[1]} + 1))
+          else
+            echo "Unexpected release tag format: $latest_tag" >&2
+            exit 1
           fi
 
-          patch=${latest_tag##*.}
-          next_patch=$((patch + 1))
-          tag="v1.0.${next_patch}"
-
+          tag="${series_prefix}.${next_patch}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Release tag: $tag"
 
