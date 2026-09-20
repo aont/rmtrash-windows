@@ -25,19 +25,24 @@ jobs:
         run: |
           set -euo pipefail
 
-          series_prefix="v1.0"
-          latest_tag="$(git tag --list "${series_prefix}.*" --sort=-v:refname | head -n 1)"
+          latest_tag=""
+          while IFS= read -r candidate; do
+            if [[ "$candidate" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              latest_tag="$candidate"
+              break
+            fi
+          done < <(git tag --list "v*.*.*" --sort=-v:refname)
 
           if [[ -z "$latest_tag" ]]; then
-            next_patch=0
-          elif [[ "$latest_tag" =~ ^${series_prefix}\.([0-9]+)$ ]]; then
-            next_patch=$((${BASH_REMATCH[1]} + 1))
+            tag="v0.0.1"
+          elif [[ "$latest_tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            next_patch=$((${BASH_REMATCH[3]} + 1))
+            tag="v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${next_patch}"
           else
             echo "Unexpected release tag format: $latest_tag" >&2
             exit 1
           fi
 
-          tag="${series_prefix}.${next_patch}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Release tag: $tag"
 
