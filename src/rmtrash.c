@@ -501,7 +501,7 @@ static int send_to_recycle_bin(char** paths, int path_count,
                                bool suppress_confirmation,
                                bool* completed,
                                char** error, uint32_t* error_code) {
-    FILEOP_FLAGS flags = 0;
+    FILEOP_FLAGS flags = FOF_SILENT | FOF_NOERRORUI;
     FileOpResult op_result;
 
     if (completed != NULL) {

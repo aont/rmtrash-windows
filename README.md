@@ -118,7 +118,8 @@ rmtrash --empty --no-sound
 
 The C CLI calls these Windows APIs:
 
-- `SHFileOperationW` with `FO_DELETE | FOF_ALLOWUNDO` for Recycle Bin moves.
+- `SHFileOperationW` with `FO_DELETE | FOF_ALLOWUNDO | FOF_SILENT |
+  FOF_NOERRORUI` for Recycle Bin moves.
 - `SHQueryRecycleBinW` for status queries.
 - `SHEmptyRecycleBinW` for emptying the Recycle Bin.
 
