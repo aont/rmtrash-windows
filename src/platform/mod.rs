@@ -1,4 +1,4 @@
-//! Platform boundary. No discovery, reads, writes, or native API calls in stage 1.
+//! Native discovery boundary. All mutation commands remain unavailable.
 #[cfg(windows)]
 mod windows;
 
@@ -6,17 +6,31 @@ mod windows;
 pub enum BackendError {
     #[error("native Recycle Bin operations require Windows 10/11 on a local NTFS volume")]
     UnsupportedPlatform,
-    #[error(
-        "{0} is not implemented in this foundation stage; no Recycle Bin access was performed"
-    )]
+    #[error("{0} is not implemented in this read-only stage")]
     NotImplemented(&'static str),
+    #[error("{operation}: {source}")]
+    Native {
+        operation: &'static str,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
-/// Gate all CLI operations before any filesystem access.
+pub fn list() -> Result<crate::listing::Listing, BackendError> {
+    #[cfg(windows)]
+    {
+        windows::list()
+    }
+    #[cfg(not(windows))]
+    {
+        Err(BackendError::UnsupportedPlatform)
+    }
+}
+
 pub fn unavailable(operation: &'static str) -> BackendError {
     #[cfg(windows)]
     {
-        windows::unavailable(operation)
+        BackendError::NotImplemented(operation)
     }
     #[cfg(not(windows))]
     {

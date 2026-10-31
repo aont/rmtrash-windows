@@ -1,4 +1,6 @@
-//! Pure Recycle Bin metadata handling; native filesystem operations are deferred.
+//! Native read-only Recycle Bin discovery, enumeration, and metadata handling.
 pub mod codec;
+pub mod listing;
 pub mod model;
 pub mod platform;
+pub mod presentation;
