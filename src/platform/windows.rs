@@ -238,3 +238,11 @@ mod trashing;
 pub(super) fn trash(path: &Path, dry_run: bool) -> Result<PathBuf, BackendError> {
     trashing::trash(path, dry_run).map_err(|e| native("trash file", e))
 }
+
+pub(super) fn mutate(
+    entry: &crate::listing::Entry,
+    restore: Option<bool>,
+    dry_run: bool,
+) -> Result<(), BackendError> {
+    trashing::mutate(entry, restore, dry_run).map_err(|e| native("modify Recycle Bin entry", e))
+}

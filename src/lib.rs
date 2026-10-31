@@ -7,3 +7,6 @@ pub mod presentation;
 
 #[cfg(any(windows, test))]
 mod transaction;
+
+#[cfg(any(windows, test))]
+mod restore;

@@ -126,7 +126,8 @@ fn destination(source: &Path) -> io::Result<PathBuf> {
         .iter()
         .position(|&u| u == 0)
         .ok_or_else(|| io::Error::other("invalid volume GUID"))?;
-    let root = PathBuf::from(OsString::from_wide(&guid[..len]));
+    let id = super::volume_id(&guid[..len])?;
+    let root = PathBuf::from(format!("\\\\?\\Volume{{{id}}}\\"));
     Ok(root.join("$Recycle.Bin").join(current_sid()?))
 }
 
@@ -342,4 +343,304 @@ pub(super) fn trash(path: &Path, dry_run: bool) -> io::Result<PathBuf> {
         extension,
     };
     transaction::commit(&mut native, &bytes)
+}
+
+/// Open the exact object without following a final reparse point. Deny writes
+/// and delete sharing so concurrent wtrash operations cannot change this selection.
+fn open_entry(path: &Path, directory: bool) -> io::Result<File> {
+    let file = OpenOptions::new()
+        .access_mode(DELETE | GENERIC_READ | FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || metadata.is_dir() != directory
+        || (!directory && !metadata.is_file())
+    {
+        return Err(io::Error::other(
+            "entry type changed or reparse point encountered",
+        ));
+    }
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: live handle and valid output storage.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if !directory && info.nNumberOfLinks != 1 {
+        return Err(io::Error::other(
+            "multiply hard-linked entries are unsupported",
+        ));
+    }
+    Ok(file)
+}
+
+fn dispose(file: &File) -> io::Result<()> {
+    let info = FILE_DISPOSITION_INFO { DeleteFile: true };
+    // SAFETY: live DELETE handle and a correctly sized structure.
+    if unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfo,
+            (&info as *const FILE_DISPOSITION_INFO).cast(),
+            size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Existing ancestors are pinned top-down. A newly created directory is pinned
+/// and checked before it is used; a concurrently inserted junction is rejected.
+fn restore_parents(path: &Path, create: bool, dry_run: bool) -> io::Result<Vec<File>> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("missing parent"))?;
+    let mut ancestors: Vec<_> = parent.ancestors().collect();
+    ancestors.reverse();
+    let mut pins = Vec::new();
+    for ancestor in ancestors {
+        match pin_directory(ancestor) {
+            Ok(pin) => {
+                reject_components(&final_path(&pin)?)?;
+                pins.push(pin);
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound && create => {
+                if dry_run {
+                    // No descendants can exist below a missing component.
+                    break;
+                }
+                match std::fs::create_dir(ancestor) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(e) => return Err(e),
+                }
+                let pin = pin_directory(ancestor)?;
+                reject_components(&final_path(&pin)?)?;
+                pins.push(pin);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(pins)
+}
+
+struct DeleteNode {
+    file: File,
+    children: Vec<DeleteNode>,
+}
+
+/// Preflight the entire tree without following links. Retain every handle so a
+/// validated name cannot be replaced. Bound depth and handles before deleting.
+fn deletion_tree(
+    file: File,
+    path: &Path,
+    depth: usize,
+    budget: &mut usize,
+) -> io::Result<DeleteNode> {
+    if depth > 128 || *budget == 0 {
+        return Err(io::Error::other(
+            "directory deletion safety limit exceeded (128 levels / 16384 objects)",
+        ));
+    }
+    *budget -= 1;
+    let mut children = Vec::new();
+    if file.metadata()?.is_dir() {
+        for child in std::fs::read_dir(path)? {
+            let child = child?;
+            let path = child.path();
+            let attributes = std::fs::symlink_metadata(&path)?;
+            // open_entry checks attributes again using the actual handle.
+            let file = open_entry(&path, attributes.is_dir())?;
+            children.push(deletion_tree(file, &path, depth + 1, budget)?);
+        }
+    }
+    Ok(DeleteNode { file, children })
+}
+
+fn delete_tree(node: DeleteNode) -> io::Result<()> {
+    for child in node.children {
+        delete_tree(child)?;
+    }
+    dispose(&node.file)
+}
+
+pub(super) fn mutate(
+    entry: &crate::listing::Entry,
+    restore: Option<bool>,
+    dry_run: bool,
+) -> io::Result<()> {
+    use std::io::Read;
+    let root = PathBuf::from(format!("\\\\?\\Volume{{{}}}\\", entry.volume))
+        .join("$Recycle.Bin")
+        .join(current_sid()?);
+    // Roots come from a freshly enumerated current-user entry. Re-pin and open
+    // the exact names, then re-decode and compare metadata after obtaining locks.
+    let _parent = pin_directory(
+        root.parent()
+            .ok_or_else(|| io::Error::other("invalid root"))?,
+    )?;
+    let _user = pin_directory(&root)?;
+    let name = OsString::from_wide(entry.id.filename_utf16());
+    let pair = crate::model::EntryNames::from_name(&name).map_err(io::Error::other)?;
+    let metadata_path = root.join(pair.metadata);
+    let payload_path = root.join(pair.payload);
+    let metadata_file = open_entry(&metadata_path, false)?;
+    let mut bytes = Vec::new();
+    (&metadata_file)
+        .take((crate::codec::MAX_RECORD_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    let metadata = crate::codec::decode(&bytes).map_err(io::Error::other)?;
+    if metadata != entry.metadata {
+        return Err(io::Error::other(
+            "entry metadata changed since selection; list again",
+        ));
+    }
+    crate::restore::validate_destination(metadata.original_path.as_utf16())?;
+    let directory = entry.kind == crate::listing::EntryKind::Directory;
+    let payload = open_entry(&payload_path, directory)?;
+    if let Some(create) = restore {
+        let original = metadata
+            .original_path
+            .to_path_buf()
+            .map_err(io::Error::other)?;
+        // Pin the drive root and check volume identity BEFORE creating parents.
+        let drive = original
+            .ancestors()
+            .last()
+            .ok_or_else(|| io::Error::other("missing drive"))?;
+        let _drive = pin_directory(drive)?;
+        if destination(drive)? != root {
+            return Err(io::Error::other(
+                "original drive now refers to a different volume; refusing cross-volume restore",
+            ));
+        }
+        let _pins = restore_parents(&original, create, dry_run)?;
+        match std::fs::symlink_metadata(&original) {
+            Ok(_) => return Err(io::Error::other("restore destination already exists")),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        if dry_run {
+            return Ok(());
+        }
+        rename(&payload, &original)?;
+        // Never roll back or delete restored data if metadata cleanup fails.
+        dispose(&metadata_file).map_err(|e| io::Error::other(format!(
+            "payload restored to {original:?}, but metadata cleanup failed at {metadata_path:?}: {e}; do not retry blindly"
+        )))?;
+    } else {
+        let tree = deletion_tree(payload, &payload_path, 0, &mut 16_384)?;
+        if dry_run {
+            return Ok(());
+        }
+        delete_tree(tree).map_err(|e| io::Error::other(format!(
+            "payload deletion failed and may be partial: {e}; metadata retained at {metadata_path:?}; inspect remaining data before retrying"
+        )))?;
+        dispose(&metadata_file).map_err(|e| {
+            io::Error::other(format!(
+                "payload deleted, but metadata cleanup failed at {metadata_path:?}: {e}"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod mutation_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "wtrash-mutation-{}-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    // All native fixtures use private temporary directories, never a real bin.
+    #[test]
+    fn move_collision_preserves_both_objects_and_retry_succeeds() {
+        let fixture = Fixture::new();
+        let payload = fixture.0.join("日本語 payload");
+        let target = fixture.0.join("noextension");
+        std::fs::write(&payload, b"recoverable").unwrap();
+        std::fs::write(&target, b"existing").unwrap();
+        let file = open_entry(&payload, false).unwrap();
+        assert!(rename(&file, &target).is_err());
+        assert_eq!(std::fs::read(&payload).unwrap(), b"recoverable");
+        assert_eq!(std::fs::read(&target).unwrap(), b"existing");
+        std::fs::remove_file(&target).unwrap();
+        rename(&file, &target).unwrap();
+        drop(file);
+        assert_eq!(std::fs::read(&target).unwrap(), b"recoverable");
+        assert!(!payload.exists());
+    }
+
+    #[test]
+    fn missing_parents_and_dry_run() {
+        let fixture = Fixture::new();
+        let target = fixture.0.join("missing").join("nested").join("file");
+        assert!(restore_parents(&target, false, false).is_err());
+        assert!(restore_parents(&target, true, true).is_ok());
+        assert!(!fixture.0.join("missing").exists());
+        let pins = restore_parents(&target, true, false).unwrap();
+        assert!(target.parent().unwrap().is_dir());
+        drop(pins);
+    }
+
+    #[test]
+    fn deletion_preflight_and_partial_failure_keep_metadata() {
+        let fixture = Fixture::new();
+        let payload = fixture.0.join("$Rtest");
+        let metadata = fixture.0.join("$Itest");
+        std::fs::create_dir(&payload).unwrap();
+        std::fs::write(payload.join("child"), b"content").unwrap();
+        std::fs::write(&metadata, b"record").unwrap();
+        let tree =
+            deletion_tree(open_entry(&payload, true).unwrap(), &payload, 0, &mut 100).unwrap();
+        assert!(payload.join("child").exists()); // preflight changes nothing
+        drop(tree);
+        // Inject failure with a handle lacking DELETE access.
+        let tree = DeleteNode {
+            file: File::open(payload.join("child")).unwrap(),
+            children: Vec::new(),
+        };
+        assert!(delete_tree(tree).is_err());
+        assert_eq!(std::fs::read(&metadata).unwrap(), b"record");
+        let tree =
+            deletion_tree(open_entry(&payload, true).unwrap(), &payload, 0, &mut 100).unwrap();
+        delete_tree(tree).unwrap();
+        assert!(!payload.exists());
+        assert!(metadata.exists());
+    }
+
+    #[test]
+    fn concurrent_selection_and_preflight_limit_fail_safely() {
+        let fixture = Fixture::new();
+        let payload = fixture.0.join("payload");
+        std::fs::write(&payload, b"content").unwrap();
+        let file = open_entry(&payload, false).unwrap();
+        assert!(open_entry(&payload, false).is_err());
+        assert!(deletion_tree(file, &payload, 0, &mut 0).is_err());
+        assert_eq!(std::fs::read(&payload).unwrap(), b"content");
+    }
 }

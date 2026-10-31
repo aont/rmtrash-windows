@@ -1,9 +1,8 @@
 # wtrash
 
-A native Windows 10/11 Recycle Bin CLI. Stage 3 adds ordinary-file trashing
-through direct version 2 `$I` metadata and `$R` payload creation. Listing remains
-available; restore, remove, and empty are not implemented. No Shell Recycle Bin
-APIs, COM, PowerShell, Explorer automation, or external trash utilities are used.
+A Windows 10/11 Recycle Bin CLI with file trashing, listing, restoration, and
+confirmed permanent deletion through direct `$I` metadata and `$R` payload access.
+No Shell Recycle Bin APIs, COM, PowerShell, Explorer automation, or external trash utilities are used.
 
 The on-disk layout is an undocumented implementation detail. Windows compilation
 has been checked, but live Windows behavior and Explorer compatibility have not
@@ -14,9 +13,9 @@ been verified. See the manual verification procedure below.
 ```text
 wtrash trash [--dry-run] <PATH>...
 wtrash list [--json]
-wtrash restore <ENTRY_ID>...
-wtrash remove <ENTRY_ID>...
-wtrash empty
+wtrash restore [--create-parents] [--dry-run] <ENTRY_ID>...
+wtrash remove [--yes] [--dry-run] <ENTRY_ID>...
+wtrash empty [--yes] [--dry-run]
 wtrash <PATH>...                 # shorthand for trash
 ```
 
@@ -33,9 +32,9 @@ to query the process SID or start volume discovery returns status 1. Inaccessibl
 individual volumes, malformed entries, and later discovery failures produce
 warnings and preserve other results. Missing `$Recycle.Bin` or SID directories
 are empty and never created. Invalid arguments return status 2. On non-Windows
-hosts, listing fails with an explicit Windows-required error. Unimplemented
-mutation commands return status 1. Trashing processes every input,
-reports each result, and returns status 1 if any input fails. On non-Windows
+hosts, all operations fail with an explicit Windows-required error.
+Trashing and mutations process every selected input,
+report each result, and return status 1 if any input fails. On non-Windows
 hosts it fails before accessing files.
 
 Arguments use `PathBuf` or `OsString`. A path matching a command name must be
@@ -90,10 +89,9 @@ original path. IDs do not depend on drive letters or list positions.
 
 Parsing accepts only canonical IDs with a valid GUID and a single `$I` filename:
 NUL, slash, backslash, colon, empty suffixes, and overlong inputs are rejected.
-`Listing::find` compares a parsed ID against freshly enumerated entries. No ID
-is joined to a filesystem root or interpreted as an arbitrary path. Future
-mutating stages must rediscover the current SID's roots, match exact entry names,
-and revalidate ownership, handles, and entry contents before acting. IDs are
+`Listing::find` compares a parsed ID against freshly enumerated entries. The CLI
+resolves IDs through discovery before joining exact validated entry names to the
+current SID root. Mutations revalidate handles and metadata before acting. IDs are
 locators, not capabilities or immutable object identities: a removed name may
 be reused, cloned volumes may share identities, and volume GUIDs are specific
 to the Windows installation and may change after reconfiguration.
@@ -125,8 +123,9 @@ cleanup can change entries and produce skipped-pair warnings.
 - `src/codec.rs`: bounded metadata codec without I/O.
 - `src/listing.rs`: IDs, injectable per-user roots, read-only enumeration/diagnostics.
 - `src/platform/windows.rs`: process SID and volume discovery, pinned native roots.
-- `src/platform/windows_trash.rs`: source validation and handle-based native moves.
+- `src/platform/windows_trash.rs`: validation, native moves, restore and deletion.
 - `src/transaction.rs`: injectable two-file commit and recovery protocol.
+- `src/restore.rs`: conservative DOS destination validation.
 - `src/presentation.rs`: human and versioned JSON serialization.
 - `src/codec/tests.rs`, `src/listing/tests.rs`: codec and synthetic filesystem fixtures.
 
@@ -290,11 +289,103 @@ filenames; never empty the Recycle Bin or delete unrelated entries.
    any real Recycle Bin. Native Windows rollback/rename failure behavior remains
    a separate integration-validation requirement.
 
-## Unsupported in this stage
+## Restore and permanent deletion safety
 
-Restoring via wtrash, permanent removal, emptying, directory trashing,
-permission/ownership changes, cross-volume fallback, quota management, automatic
-recovery, and verified Explorer compatibility remain outside this stage.
+```powershell
+cargo install --path .
+wtrash list --json
+wtrash restore --dry-run 'wtrash1:<volume-guid>:<filename-utf16-hex>'
+wtrash restore --create-parents 'wtrash1:<volume-guid>:<filename-utf16-hex>'
+wtrash remove --dry-run 'wtrash1:<volume-guid>:<filename-utf16-hex>'
+wtrash remove --yes 'wtrash1:<volume-guid>:<filename-utf16-hex>'
+wtrash empty --dry-run
+# Only in an exclusively disposable account after reviewing the dry run:
+wtrash empty --yes
+```
+
+Build/install on Windows with Rust 1.85+ and an appropriate Windows linker/toolchain.
+Linux and macOS support codec/fixture development only; they cannot manipulate a
+Windows Recycle Bin. There is no dependency on Shell recycling APIs or utilities.
+
+Restore validates the decoded absolute DOS path, rejects device names, streams,
+ambiguous components, Recycle Bin destinations and reparse-point ancestors, and
+pins existing parents. An existing file, directory, or link at the destination
+causes failure; the final handle-based rename also atomically refuses replacement.
+The original drive must still identify the entry's volume GUID. A changed drive
+letter, mounted-folder ancestor, or unavailable volume fails safely; there is no
+cross-volume copy fallback. `--create-parents` creates ordinary missing directories
+one component at a time and pins them before proceeding. Created empty parents
+may remain after a later failure; their original ACLs/timestamps cannot be recovered.
+Dry runs create no directories. Moves retain ordinary same-volume file/directory
+contents and metadata. Directory restore moves the whole `$R` directory without
+traversing or following descendants. Metadata is removed only after a successful
+payload move. If cleanup fails, the diagnostic distinguishes already-restored data
+from remaining metadata; inspect the reported paths before retrying.
+
+`remove` and `empty` require typing `yes` at a terminal or supplying `--yes`.
+Non-interactive calls require `--yes`, except dry runs.
+Confirmation covers a snapshot of validated entries, never entries arriving later.
+Repeated IDs are deduplicated. Invalid IDs fail individually; other selected entries
+are still processed. Emptying reports discovery warnings and returns failure when
+its view may be incomplete, even if all selected deletions succeeded.
+
+Only valid current-user `$I`/`$R` pairs are eligible. Exact metadata is re-read
+under a handle that denies concurrent writes/deletion and compared to the selection.
+Payloads are opened without following reparse points and held against replacement;
+multiply linked files are rejected. IDs remain name-based locators: replacement by
+an identical record before locking cannot be detected as an identity change.
+Neither `$Recycle.Bin` nor the SID directory is ever recursively removed.
+Orphans, malformed records, staging files, and unknown files are left untouched.
+
+Directory payload deletion first opens and validates the entire tree, rejecting
+all reparse points and multiply linked files before deleting anything. Preflight
+is bounded to 128 descendant levels and 16,384 objects per entry. It retains every
+handle until deletion or failure. Children are deleted through their validated
+handles before parents. New children, access denial, read-only files, or other
+errors may still cause partial deletion; the diagnostic says so and retains `$I`
+metadata. Failed metadata cleanup after payload deletion is reported separately.
+There is no rollback for permanent deletion. A process crash can also leave a
+partial tree or an orphan `$I`; no automatic repair is attempted.
+
+**Permanent filesystem deletion does not guarantee physical data sanitization.**
+Back up important data. Review IDs and dry-run output before destructive commands.
+Directory trashing remains disabled: no actual Windows-generated directory fixture
+has been verified for the original-size field and `$R` representation. The program
+will not guess directory metadata. Existing directory pairs can be listed, restored,
+or removed subject to the checks above. Quotas, eviction, ACL changes, automatic
+recovery, and demonstrated Explorer compatibility remain unsupported.
+
+## Additional manual acceptance checks
+
+All live Windows checks require explicit operator opt-in on disposable Windows
+10/11 VMs and files. No automated fixture touches the real Recycle Bin. Record
+Windows 10 and 11 results independently; cross-compilation proves neither runtime
+behavior nor Explorer compatibility.
+
+1. Capture the JSON baseline. Trash the same disposable Unicode/space/extensionless
+   filename twice with different known contents; restore each ID independently and
+   compare hashes. Repeat with a long DOS path and on a second NTFS volume.
+2. Create a destination conflict: restore must fail and retain both pair members.
+   Delete original parents: normal restore must fail, dry-run with `--create-parents`
+   must create nothing, and real restore with that flag must recover the hash.
+3. Change the original drive mapping or insert a junction/mount-point ancestor.
+   Restore must refuse without moving the payload. Test inaccessible parents and
+   sharing conflicts too; release the conflict and confirm a retry succeeds.
+4. On disposable pairs only, confirm remove dry-run changes nothing, cancelling
+   the prompt changes nothing, and redirected input without `--yes` fails. Confirm
+   explicit deletion removes only the selected pair and returns the proper status.
+5. In an exclusively disposable account, seed malformed/truncated records and
+   orphan `$I`/`$R` files. Review `empty --dry-run`, then explicitly run `empty --yes`.
+   Validated pairs alone should disappear; uncertain files must remain with warnings.
+6. Create a disposable directory entry using Explorer, record raw `$I` original size
+   and `$R` layout before considering future directory trash support. Exercise wtrash
+   restore and remove of this existing directory with nested contents. A nested
+   junction must cause removal preflight to fail without touching its target.
+7. Exercise concurrent attempts, destination races, access-denied descendants, and
+   interrupted restore/remove in the VM. Inspect diagnostics and retained metadata
+   and payloads after partial failures. Do not infer crash atomicity from success.
+8. Repeat Explorer visibility, path/time display, Explorer restoration, restart,
+   and reboot checks from the earlier checklist. Record each result separately.
 
 ## Development
 
@@ -317,7 +408,10 @@ identical entry names, Unicode and native non-Unicode names (Windows), orphans,
 corrupt/oversized records, empty/missing/unreadable roots, Unix permission denial
 (where enforced), rejected symlinks, safe ID parsing/lookup, deterministic JSON,
 64-bit precision, UTC output, and human control-character escaping.
-Transaction and CLI fixtures are also defined. Tests are **not executed, as
+Transaction and CLI fixtures are also defined. Mutation fixtures cover unsafe
+metadata destinations, native no-overwrite moves, missing-parent dry runs,
+concurrent selection, deletion limits, and injected deletion-access failure in
+private temporary directories. Native mutation fixtures compile only on Windows. Tests are **not executed, as
 requested**. `cargo check --all-targets` compiles test sources without running them.
 
 ## References
