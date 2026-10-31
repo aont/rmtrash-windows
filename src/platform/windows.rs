@@ -232,3 +232,9 @@ pub(super) fn list() -> Result<Listing, BackendError> {
     drop(pins);
     Ok(listing)
 }
+
+#[path = "windows_trash.rs"]
+mod trashing;
+pub(super) fn trash(path: &Path, dry_run: bool) -> Result<PathBuf, BackendError> {
+    trashing::trash(path, dry_run).map_err(|e| native("trash file", e))
+}

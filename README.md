@@ -1,19 +1,18 @@
 # wtrash
 
-A native Windows 10/11 Recycle Bin CLI. Stage 2 implements **read-only listing**
-using ordinary Windows token, volume, and filesystem APIs. It never creates,
-moves, restores, deletes, or changes permissions in the actual Recycle Bin.
-Only the current process user's entries on local fixed/removable NTFS volumes
-are considered. Other commands remain unavailable.
+A native Windows 10/11 Recycle Bin CLI. Stage 3 adds ordinary-file trashing
+through direct version 2 `$I` metadata and `$R` payload creation. Listing remains
+available; restore, remove, and empty are not implemented. No Shell Recycle Bin
+APIs, COM, PowerShell, Explorer automation, or external trash utilities are used.
 
-The on-disk Recycle Bin layout is an undocumented Windows implementation detail,
-not a guaranteed public interface. Encoding a record is not sufficient to recycle
-a file safely; mutating filesystem operations are deliberately deferred.
+The on-disk layout is an undocumented implementation detail. Windows compilation
+has been checked, but live Windows behavior and Explorer compatibility have not
+been verified. See the manual verification procedure below.
 
 ## CLI
 
 ```text
-wtrash trash <PATH>...
+wtrash trash [--dry-run] <PATH>...
 wtrash list [--json]
 wtrash restore <ENTRY_ID>...
 wtrash remove <ENTRY_ID>...
@@ -34,8 +33,10 @@ to query the process SID or start volume discovery returns status 1. Inaccessibl
 individual volumes, malformed entries, and later discovery failures produce
 warnings and preserve other results. Missing `$Recycle.Bin` or SID directories
 are empty and never created. Invalid arguments return status 2. On non-Windows
-hosts, listing fails with an explicit Windows-required error. Mutation commands
-return status 1 without accessing the Recycle Bin.
+hosts, listing fails with an explicit Windows-required error. Unimplemented
+mutation commands return status 1. Trashing processes every input,
+reports each result, and returns status 1 if any input fails. On non-Windows
+hosts it fails before accessing files.
 
 Arguments use `PathBuf` or `OsString`. A path matching a command name must be
 qualified (for example, `.\list`); prefix option-like paths with `--`.
@@ -124,13 +125,16 @@ cleanup can change entries and produce skipped-pair warnings.
 - `src/codec.rs`: bounded metadata codec without I/O.
 - `src/listing.rs`: IDs, injectable per-user roots, read-only enumeration/diagnostics.
 - `src/platform/windows.rs`: process SID and volume discovery, pinned native roots.
+- `src/platform/windows_trash.rs`: source validation and handle-based native moves.
+- `src/transaction.rs`: injectable two-file commit and recovery protocol.
 - `src/presentation.rs`: human and versioned JSON serialization.
 - `src/codec/tests.rs`, `src/listing/tests.rs`: codec and synthetic filesystem fixtures.
 
 No Shell/COM Recycle Bin interface, shell-backed recycling crate, PowerShell,
 Explorer, or external trash utility is used. Tests can supply `RecycleRoot`
 values directly to `listing::enumerate`; there is deliberately no CLI switch or
-environment variable redirecting production discovery to an arbitrary user root.
+environment variable redirecting production discovery or trashing to an arbitrary
+user root.
 
 ## Metadata format
 
@@ -175,12 +179,122 @@ UTF-16 even for non-Unicode suffixes. FILETIME values remain raw and lossless;
 `to_system_time()` uses checked arithmetic and returns `None` if the host cannot
 represent a timestamp, including dates before the Unix epoch.
 
+## Trashing safety and transaction limits
+
+`wtrash trash --dry-run <PATH>...` resolves paths, opens/pins the source and
+ancestors, validates volume/SID availability, and serializes metadata in memory.
+It prints the target SID directory and creates or moves nothing. It does not
+reserve names or guarantee that a future write will succeed. Shorthand accepts
+multiple paths too. Use `wtrash trash -- --dry-run` to trash a file literally
+named `--dry-run`, and `wtrash -- list` for a file literally named `list`.
+
+Supported inputs are ordinary, singly linked files on local fixed/removable
+NTFS volumes with an existing Windows-initialized `$Recycle.Bin` and current
+process SID directory. Relative and drive-qualified absolute DOS paths, spaces,
+Unicode, extensionless files, and long paths within the codec limit are accepted
+when native filesystem calls support them. Native UTF-16 is preserved without
+lossy conversion; malformed UTF-16 is explicitly unsupported by the codec.
+Extensions are retained in `$I`/`$R` names and must fit a 255-unit component.
+Directories, volume roots, UNC/mapped network paths, device/extended namespace
+inputs, alternate data streams, trailing-dot/space components, multiple hard
+links, and all source/ancestor/root reparse points are rejected. This includes
+symlinks, junctions, volume mount-point ancestors, and cloud placeholders. Short
+aliases are resolved before rejecting paths inside `$Recycle.Bin`. A resolved
+source must have a DOS drive path. Files open with conflicting sharing modes may
+fail safely. No directories or ACLs are initialized or modified; no quotas or
+eviction are implemented.
+
+Source/ancestor and Recycle Bin directory handles stay open without delete
+sharing to prevent path replacement. The source also denies write sharing while
+its size is collected and the operation runs. Each attempt uses the system RNG
+to generate a six-character uppercase alphanumeric suffix, retaining the source
+extension. A `.wtrash-<suffix>.tmp` file is created exclusively in the SID root;
+its complete metadata is written and flushed before payload movement. Both
+payload movement and final metadata publication use `SetFileInformationByHandle`
+with replacement disabled. Existing names are never overwritten, and collision
+handling retries up to 128 times. There is no copy/delete fallback, including on
+cross-volume errors. Staging also excludes competing wtrash attempts choosing
+the same suffix. A precheck avoids existing metadata; concurrent programs that
+ignore staging can still introduce a transient foreign pairing. Atomic
+no-replacement operations detect collisions and trigger safe recovery.
+
+If publication fails, rollback moves the same open payload back to the original
+path without replacement. If that fails (for example, another process recreated
+the original filename), both payload and complete staged metadata remain in the
+SID root. The error names both recovery paths. After closing programs that hold
+conflicting handles, move that specific payload to the original path if vacant,
+or a separate safe destination. Retain the staged record until recovery is
+confirmed. Never remove the payload as cleanup. Pre-move failures clean up only
+our own staged metadata; failed cleanup is reported with its location.
+
+This is **not a two-file atomic transaction or a crash-durable journal**. Process
+termination, power loss, external deletion, and filesystem/filter-driver faults
+may leave a partial stage, an orphan payload plus stage, or a committed pair even
+if no success was printed. Only the final metadata rename counts as a successful
+commit in a running process. Do not blindly retry a missing source: inspect the
+reported paths and listing diagnostics. A complete stage retains the original
+path, size, and deletion time; partial stages must not be treated as valid
+metadata. Never rename a stage to `$I` until its complete record and matching
+payload have been validated. Listing diagnoses orphan `$R` entries and ignores
+staging files. No automatic crash recovery or repair command is implemented.
+
+## Explorer compatibility and manual Windows verification
+
+No live Windows tests have been performed. These are separate, **unverified**
+claims: structural validity on disk, visibility in Explorer, correct original
+path/time display, restoration through Explorer, and persistence across Explorer
+restart or reboot. No Shell notification API is called. Explorer may cache its
+view; neither refresh behavior nor cache lifetime is established.
+
+Use a disposable Windows 10/11 VM and a fresh test account, with an initialized
+Recycle Bin on a local NTFS drive. Keep all checks scoped to the disposable
+filenames; never empty the Recycle Bin or delete unrelated entries.
+
+1. Build with `cargo build`. Record Windows version, volume filesystem, test SID,
+   local timezone, and the current `wtrash list --json` baseline. If the bin is
+   uninitialized, create and recycle a disposable file using Windows Explorer
+   manually, then retry. wtrash must never create the SID directory itself.
+2. In a fresh test directory create small files with known contents: `plain.txt`,
+   `noextension`, `space name.txt`, `日本語.txt`, `-option`, and `list`. Use CMD
+   `echo`/redirection or an editor. Record their absolute paths, byte sizes and
+   SHA-256 hashes (`certutil -hashfile <path> SHA256`).
+3. Run `wtrash trash --dry-run plain.txt "space name.txt"`. Verify all inputs
+   remain byte-identical and that no new stage or pair appeared in the SID root.
+4. Run `wtrash trash plain.txt "space name.txt"`, then shorthand
+   `wtrash noextension 日本語.txt`, and `wtrash -- -option list`. Include one
+   absolute input path. Confirm each source disappears, each invocation returns
+   0, and exactly one new pair per input appears in `wtrash list --json`.
+5. For each new pair inspect the exact `$I` and `$R` names under the test SID.
+   Decode `$I` with the codec (or inspect a copy in a hex viewer): version 2,
+   original size, FILETIME, little-endian UTF-16 count including NUL, absolute
+   original path, and final terminator. Hash each `$R` and compare to the input.
+   Record this as structural verification separately from Explorer results.
+6. Open the Recycle Bin in Explorer. Record immediate visibility, then manually
+   refresh and record visibility again. Inspect Original Location, name, size,
+   and deletion time (allowing for local-time presentation). Compare with JSON
+   raw FILETIME/UTC and the recorded source paths. Do not infer correct display
+   from structural correctness alone.
+7. Restore one selected disposable file through Explorer. Verify its original
+   path and hash and that its exact pair disappears. Leave other test entries,
+   restart Explorer, and record display again. Reboot the VM and repeat display,
+   path/time inspection, and restoration/hash checks for remaining entries.
+8. Verify explicit refusal for a directory, drive root, an input under the test
+   SID directory, a symlink/junction ancestor, a hard-linked disposable file,
+   a UNC share, and a non-NTFS volume if available. Confirm no source changes.
+   Try a mixed list of valid and nonexistent disposable inputs: valid inputs
+   should commit, errors should identify their inputs, and exit status is 1.
+9. Run the synthetic failure-injection suite separately when tests are allowed:
+   `cargo test transaction::tests` and `cargo test --bin wtrash`. These fixtures
+   exercise stage creation/partial writes, movement, publication, concurrent
+   collisions, retry exhaustion, rollback, and cleanup failures without touching
+   any real Recycle Bin. Native Windows rollback/rename failure behavior remains
+   a separate integration-validation requirement.
+
 ## Unsupported in this stage
 
-Trashing, restoring, permanent removal, emptying, permission/ownership changes,
-cross-volume moves, collision-safe allocation, rollback/crash recovery, and
-mutating reparse-point/hard-link policies. No live Windows Recycle Bin integration
-validation has been performed.
+Restoring via wtrash, permanent removal, emptying, directory trashing,
+permission/ownership changes, cross-volume fallback, quota management, automatic
+recovery, and verified Explorer compatibility remain outside this stage.
 
 ## Development
 
@@ -203,8 +317,8 @@ identical entry names, Unicode and native non-Unicode names (Windows), orphans,
 corrupt/oversized records, empty/missing/unreadable roots, Unix permission denial
 (where enforced), rejected symlinks, safe ID parsing/lookup, deterministic JSON,
 64-bit precision, UTC output, and human control-character escaping.
-Tests are defined but **not executed, as requested**. `cargo check --all-targets`
-compiles test sources without running them.
+Transaction and CLI fixtures are also defined. Tests are **not executed, as
+requested**. `cargo check --all-targets` compiles test sources without running them.
 
 ## References
 
@@ -220,3 +334,7 @@ Native discovery follows Microsoft's documentation for
 [drive types](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getdrivetypew),
 [token information](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation),
 and [SID conversion](https://learn.microsoft.com/en-us/windows/win32/api/sddl/nf-sddl-convertsidtostringsidw).
+
+Trashing uses Microsoft's [handle-based rename structure](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info)
+with replacement disabled and [system-preferred random generation](https://learn.microsoft.com/en-us/windows/win32/api/bcrypt/nf-bcrypt-bcryptgenrandom).
+These API contracts and the format references do not establish Explorer compatibility.

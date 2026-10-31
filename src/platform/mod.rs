@@ -1,4 +1,4 @@
-//! Native discovery boundary. All mutation commands remain unavailable.
+//! Native discovery boundary. File trashing uses a separate staged transaction.
 #[cfg(windows)]
 mod windows;
 
@@ -6,7 +6,7 @@ mod windows;
 pub enum BackendError {
     #[error("native Recycle Bin operations require Windows 10/11 on a local NTFS volume")]
     UnsupportedPlatform,
-    #[error("{0} is not implemented in this read-only stage")]
+    #[error("{0} is not implemented in this stage")]
     NotImplemented(&'static str),
     #[error("{operation}: {source}")]
     Native {
@@ -36,5 +36,17 @@ pub fn unavailable(operation: &'static str) -> BackendError {
     {
         let _ = operation;
         BackendError::UnsupportedPlatform
+    }
+}
+
+pub fn trash(path: &std::path::Path, dry_run: bool) -> Result<std::path::PathBuf, BackendError> {
+    #[cfg(windows)]
+    {
+        windows::trash(path, dry_run)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (path, dry_run);
+        Err(BackendError::UnsupportedPlatform)
     }
 }
