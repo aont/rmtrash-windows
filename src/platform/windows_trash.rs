@@ -200,6 +200,7 @@ impl Operations for Native {
 
     fn create(&mut self, names: &Names) -> io::Result<File> {
         OpenOptions::new()
+            .write(true)
             .access_mode(DELETE | GENERIC_READ | GENERIC_WRITE)
             .share_mode(FILE_SHARE_READ)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
