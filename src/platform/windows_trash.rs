@@ -319,6 +319,8 @@ pub(super) fn trash(path: &Path, dry_run: bool) -> io::Result<PathBuf> {
         ));
     }
     let original_path = WindowsPath::from_path(&original).map_err(io::Error::other)?;
+    // Do not generate an entry whose destination our own restore would reject.
+    crate::restore::validate_destination(original_path.as_utf16())?;
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(io::Error::other)?;
@@ -642,5 +644,73 @@ mod mutation_tests {
         assert!(open_entry(&payload, false).is_err());
         assert!(deletion_tree(file, &payload, 0, &mut 0).is_err());
         assert_eq!(std::fs::read(&payload).unwrap(), b"content");
+    }
+
+    #[test]
+    fn directory_move_preserves_nested_contents_and_refuses_existing_directory() {
+        let fixture = Fixture::new();
+        let payload = fixture.0.join("$Rdirectory");
+        let target = fixture.0.join("restored directory");
+        std::fs::create_dir_all(payload.join("nested")).unwrap();
+        std::fs::write(
+            payload.join("nested").join("日本語 noextension"),
+            b"contents",
+        )
+        .unwrap();
+        std::fs::create_dir(&target).unwrap();
+        let file = open_entry(&payload, true).unwrap();
+        assert!(rename(&file, &target).is_err());
+        assert!(payload.join("nested").join("日本語 noextension").exists());
+        std::fs::remove_dir(&target).unwrap();
+        rename(&file, &target).unwrap();
+        drop(file);
+        assert!(!payload.exists());
+        assert_eq!(
+            std::fs::read(target.join("nested").join("日本語 noextension")).unwrap(),
+            b"contents"
+        );
+    }
+
+    #[test]
+    fn hard_link_in_directory_aborts_preflight_without_deleting_contents() {
+        let fixture = Fixture::new();
+        let payload = fixture.0.join("$Rdirectory");
+        let outside = fixture.0.join("outside");
+        std::fs::create_dir(&payload).unwrap();
+        std::fs::write(&outside, b"shared contents").unwrap();
+        std::fs::write(payload.join("ordinary"), b"retain me").unwrap();
+        std::fs::hard_link(&outside, payload.join("linked")).unwrap();
+        assert!(
+            deletion_tree(open_entry(&payload, true).unwrap(), &payload, 0, &mut 100,).is_err()
+        );
+        assert_eq!(std::fs::read(&outside).unwrap(), b"shared contents");
+        assert_eq!(
+            std::fs::read(payload.join("linked")).unwrap(),
+            b"shared contents"
+        );
+        assert_eq!(
+            std::fs::read(payload.join("ordinary")).unwrap(),
+            b"retain me"
+        );
+    }
+
+    #[test]
+    fn new_child_after_preflight_is_retained_on_partial_deletion() {
+        let fixture = Fixture::new();
+        let payload = fixture.0.join("$Rdirectory");
+        let metadata = fixture.0.join("$Idirectory");
+        std::fs::create_dir(&payload).unwrap();
+        std::fs::write(payload.join("selected"), b"selected").unwrap();
+        std::fs::write(&metadata, b"recovery record").unwrap();
+        let tree =
+            deletion_tree(open_entry(&payload, true).unwrap(), &payload, 0, &mut 100).unwrap();
+        std::fs::write(payload.join("new child"), b"unselected").unwrap();
+        assert!(delete_tree(tree).is_err());
+        assert!(!payload.join("selected").exists());
+        assert_eq!(
+            std::fs::read(payload.join("new child")).unwrap(),
+            b"unselected"
+        );
+        assert_eq!(std::fs::read(&metadata).unwrap(), b"recovery record");
     }
 }

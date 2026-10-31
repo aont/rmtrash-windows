@@ -309,7 +309,10 @@ Windows Recycle Bin. There is no dependency on Shell recycling APIs or utilities
 
 Restore validates the decoded absolute DOS path, rejects device names, streams,
 ambiguous components, Recycle Bin destinations and reparse-point ancestors, and
-pins existing parents. An existing file, directory, or link at the destination
+pins existing parents. Device stems with spaces before an extension, such as
+`CON .txt`, are conservatively rejected too. Trashing applies the same destination
+validation before generating metadata so it does not create entries that its own
+restore would refuse. An existing file, directory, or link at the destination
 causes failure; the final handle-based rename also atomically refuses replacement.
 The original drive must still identify the entry's volume GUID. A changed drive
 letter, mounted-folder ancestor, or unavailable volume fails safely; there is no
@@ -413,6 +416,9 @@ metadata destinations, native no-overwrite moves, missing-parent dry runs,
 concurrent selection, deletion limits, and injected deletion-access failure in
 private temporary directories. Native mutation fixtures compile only on Windows. Tests are **not executed, as
 requested**. `cargo check --all-targets` compiles test sources without running them.
+Additional native fixtures cover nested directory moves, existing directory
+destinations, hard links within a deletion tree, and children arriving after
+deletion preflight. They never access the real Recycle Bin.
 
 ## References
 

@@ -17,6 +17,9 @@ pub(crate) fn validate_destination(path: &[u16]) -> io::Result<()> {
             .split('.')
             .next()
             .unwrap_or_default()
+            // Refuse ambiguous device stems even when spaces precede an
+            // extension (for example, "CON .txt").
+            .trim_end_matches(' ')
             .to_uppercase();
         let device = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"].contains(&base.as_str())
             || ["COM", "LPT"].iter().any(|prefix| {
@@ -71,6 +74,10 @@ mod tests {
             r"C:\a \file",
             r"C:\$Recycle.Bin\file",
             r"C:\CON.txt",
+            r"C:\CON .txt",
+            r"C:\aux  .log",
+            r"C:\COM1 .txt",
+            r"C:\LPT¹ .txt",
             r"C:\LPT¹",
             "C:\\bad\nname",
         ] {
